@@ -2,4 +2,5 @@ fastapi==0.110.0
 uvicorn==0.29.0
 instagrapi==1.19.2
 python-dotenv==1.0.1 # Optional, for local testing with .env
+python-multipart==0.0.9 # Added for handling form data in FastAPI
 Pillow>=8.1.1
