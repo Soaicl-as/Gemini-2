@@ -4,9 +4,9 @@ import random
 from instagrapi import Client
 from instagrapi.exceptions import (
     BadPassword, TwoFactorRequired, LoginRequired,
-    RateLimitError, ClientLoginError, ChallengeRequired
+    RateLimitError, ChallengeRequired, ClientError # Removed ClientLoginError, added ClientError
 )
-from logger import log_message
+from .logger import log_message # Use relative import
 
 # In-memory storage for the Instagram client instance and session data
 # NOTE: This will be reset if the server restarts on Render free tier.
@@ -34,14 +34,18 @@ def login(username, password):
         try:
             log_message('info', "Attempting to load session data...")
             ig_client.set_settings(session_data)
+            # Use login_by_sessionid or similar if session data is loaded correctly
+            # However, login() with username/password after set_settings can also
+            # validate the session and potentially refresh it. Let's stick to login()
+            # for simplicity, assuming set_settings primes it.
             ig_client.login(username, password)
             log_message('info', f"Successfully logged in using session data as {username}")
             return {"status": "success", "message": "Logged in successfully."}
-        except (LoginRequired, ClientLoginError, BadPassword):
-            log_message('warning', "Session data invalid or expired. Attempting fresh login.")
+        except (LoginRequired, ClientError, BadPassword): # Catch ClientError here
+            log_message('warning', "Session data invalid or expired or general client error during session login. Attempting fresh login.")
             session_data = {} # Clear invalid session data
         except Exception as e:
-            log_message('error', f"Error loading session data: {e}")
+            log_message('error', f"Error loading or using session data: {e}")
             session_data = {} # Clear invalid session data
 
 
@@ -62,6 +66,9 @@ def login(username, password):
         log_message('warning', "Login requires 2FA.")
         # Store verification code data temporarily
         session_data['2fa_code_data'] = e.dict()
+        # Store username and password temporarily for 2FA completion if needed
+        session_data['temp_username'] = username
+        session_data['temp_password'] = password
         return {"status": "2fa_required", "message": "2FA required. Check your email/phone for the code."}
     except ChallengeRequired:
          log_message('warning', "Login requires challenge (e.g., email/phone verification link).")
@@ -70,6 +77,11 @@ def login(username, password):
          ig_client = None # Clear client on failure
          session_data = {}
          return {"status": "challenge_required", "message": "Challenge required. Please try logging in manually on Instagram first or check email/phone."}
+    except ClientError as e: # Catch general client errors during fresh login
+        log_message('error', f"A client error occurred during login: {e}")
+        ig_client = None # Clear client on failure
+        session_data = {}
+        return {"status": "error", "message": f"Login failed due to client error: {e}"}
     except Exception as e:
         log_message('error', f"An unexpected error occurred during login: {e}")
         ig_client = None # Clear client on failure
@@ -79,36 +91,49 @@ def login(username, password):
 def complete_2fa(verification_code):
     """Completes the 2FA login process."""
     global ig_client, session_data
-    if not ig_client or '2fa_code_data' not in session_data:
-        log_message('error', "2FA completion failed: Client not initialized or 2FA data missing.")
-        return {"status": "error", "message": "2FA process not initiated. Please try logging in again."}
+    # Ensure client is initialized and 2FA data is present
+    if not ig_client or '2fa_code_data' not in session_data or 'temp_username' not in session_data or 'temp_password' not in session_data:
+        log_message('error', "2FA completion failed: Client not initialized, 2FA data missing, or temporary credentials missing.")
+        return {"status": "error", "message": "2FA process not initiated correctly. Please try logging in again."}
 
     try:
         log_message('info', f"Attempting to complete 2FA with code: {verification_code}")
-        # Use the verification_code_data stored during the initial login attempt
-        ig_client.complete_login(session_data['2fa_code_data'], verification_code)
+        # Use the verification_code_data and temporary credentials stored during the initial login attempt
+        ig_client.complete_login(session_data['temp_username'], session_data['temp_password'], verification_code, session_data['2fa_code_data'])
         log_message('info', "2FA successfully completed.")
         # Save the new session data after successful 2FA
         session_data = ig_client.get_settings()
-        # Remove the temporary 2FA data
+        # Clean up temporary 2FA data and credentials
         if '2fa_code_data' in session_data:
              del session_data['2fa_code_data']
+        if 'temp_username' in session_data:
+             del session_data['temp_username']
+        if 'temp_password' in session_data:
+             del session_data['temp_password']
+
         return {"status": "success", "message": "Logged in successfully after 2FA."}
     except BadPassword: # Can happen if 2FA code is wrong
         log_message('error', "2FA completion failed: Incorrect 2FA code.")
         ig_client = None # Clear client on failure
-        session_data = {}
+        session_data = {} # Clear session data including temp credentials
         return {"status": "error", "message": "Incorrect 2FA code."}
+    except ClientError as e: # Catch general client errors during 2FA completion
+        log_message('error', f"A client error occurred during 2FA completion: {e}")
+        ig_client = None # Clear client on failure
+        session_data = {} # Clear session data including temp credentials
+        return {"status": "error", "message": f"2FA completion failed due to client error: {e}"}
     except Exception as e:
         log_message('error', f"An unexpected error occurred during 2FA completion: {e}")
         ig_client = None # Clear client on failure
-        session_data = {}
+        session_data = {} # Clear session data including temp credentials
         return {"status": "error", "message": f"2FA completion failed: {e}"}
+
 
 def get_user_id(username):
     """Gets the user ID for a given username."""
     client = get_client()
-    if not client:
+    if not client or not client.is_logged_in: # Added check for is_logged_in
+        log_message('error', "Client not initialized or not logged in. Cannot get user ID.")
         return None
     try:
         log_message('info', f"Fetching user ID for {username}...")
@@ -122,34 +147,29 @@ def get_user_id(username):
 def get_followers_or_following(user_id, list_type):
     """Fetches followers or following list for a user ID."""
     client = get_client()
-    if not client:
-        log_message('error', "Client not initialized. Cannot fetch list.")
+    if not client or not client.is_logged_in: # Added check for is_logged_in
+        log_message('error', "Client not initialized or not logged in. Cannot fetch list.")
         return {"status": "error", "message": "Not logged in."}
 
     try:
         log_message('info', f"Fetching {list_type} for user ID: {user_id}")
         users = []
+        # Use a generator to fetch users in batches
+        # instagrapi v1.19.2 uses user_followers_v1_chunk and user_following_v1_chunk
         if list_type == 'followers':
-            # Use a generator to fetch followers in batches
+            # The chunk methods return generators
             for follower in client.user_followers_v1_chunk(user_id):
                  users.append({"pk": follower.pk, "username": follower.username, "full_name": follower.full_name})
-                 log_message('info', f"Fetched {len(users)} followers so far...")
-            # Fallback if chunked method fails or is empty, use the simpler method
-            if not users:
-                 log_message('warning', "Chunked followers fetch empty, trying simpler method.")
-                 followers = client.user_followers(user_id)
-                 users = [{"pk": u.pk, "username": u.username, "full_name": u.full_name} for u in followers]
+                 # log_message('info', f"Fetched {len(users)} followers so far...") # Log less frequently for large lists
 
         elif list_type == 'following':
-            # Use a generator to fetch following in batches
+            # The chunk methods return generators
             for following in client.user_following_v1_chunk(user_id):
                 users.append({"pk": following.pk, "username": following.username, "full_name": following.full_name})
-                log_message('info', f"Fetched {len(users)} following so far...")
-            # Fallback if chunked method fails or is empty
-            if not users:
-                 log_message('warning', "Chunked following fetch empty, trying simpler method.")
-                 following = client.user_following(user_id)
-                 users = [{"pk": u.pk, "username": u.username, "full_name": u.full_name} for u in following]
+                # log_message('info', f"Fetched {len(users)} following so far...") # Log less frequently for large lists
+        else:
+             return {"status": "error", "message": f"Invalid list type: {list_type}. Must be 'followers' or 'following'."}
+
 
         log_message('info', f"Successfully fetched {len(users)} {list_type}.")
         return {"status": "success", "users": users}
@@ -157,6 +177,9 @@ def get_followers_or_following(user_id, list_type):
     except RateLimitError:
         log_message('warning', "Rate limit hit while fetching list. Wait a bit before trying again.")
         return {"status": "warning", "message": "Rate limit hit. Please wait before fetching another list."}
+    except ClientError as e: # Catch general client errors during list fetching
+        log_message('error', f"A client error occurred while fetching {list_type} for user ID {user_id}: {e}")
+        return {"status": "error", "message": f"Failed to fetch list due to client error: {e}"}
     except Exception as e:
         log_message('error', f"Failed to fetch {list_type} for user ID {user_id}: {e}")
         return {"status": "error", "message": f"Failed to fetch list: {e}"}
@@ -164,8 +187,8 @@ def get_followers_or_following(user_id, list_type):
 def send_mass_dm(recipient_pks, message, min_delay, max_delay, max_recipients):
     """Sends a direct message to a list of user PKS with delays."""
     client = get_client()
-    if not client:
-        log_message('error', "Client not initialized. Cannot send messages.")
+    if not client or not client.is_logged_in: # Added check for is_logged_in
+        log_message('error', "Client not initialized or not logged in. Cannot send messages.")
         return {"status": "error", "message": "Not logged in."}
 
     log_message('info', f"Attempting to send message to {min(len(recipient_pks), max_recipients)} recipients.")
@@ -176,13 +199,12 @@ def send_mass_dm(recipient_pks, message, min_delay, max_delay, max_recipients):
     # Shuffle recipients to make it less sequential
     random.shuffle(recipient_pks)
 
-    for i, pk in enumerate(recipient_pks):
-        if sent_count >= max_recipients:
-            log_message('info', f"Reached maximum recipient limit ({max_recipients}). Stopping.")
-            break
+    # Limit the number of recipients to the specified maximum
+    recipients_to_process = recipient_pks[:max_recipients]
 
+    for i, pk in enumerate(recipients_to_process):
         delay = random.randint(min_delay, max_delay)
-        log_message('info', f"Sending message to user PK: {pk}...")
+        log_message('info', f"Sending message to user PK: {pk} (Recipient {i+1}/{len(recipients_to_process)})...")
 
         try:
             # instagrapi expects a list of recipient PKS for a single thread,
@@ -199,12 +221,17 @@ def send_mass_dm(recipient_pks, message, min_delay, max_delay, max_recipients):
             # Wait for a longer period if rate limited
             time.sleep(max(delay * 2, 60)) # Wait at least 60 seconds
             continue # Try the next recipient after waiting
+        except ClientError as e: # Catch general client errors during sending
+            log_message('error', f"A client error occurred while sending to {pk}: {e}")
+            failed_count += 1
+            errors.append(f"Failed to send to {pk} due to client error: {e}")
         except Exception as e:
             log_message('error', f"Failed to send message to {pk}: {e}")
             failed_count += 1
             errors.append(f"Failed to send to {pk}: {e}")
 
-        if i < len(recipient_pks) - 1 and sent_count < max_recipients:
+        # Only wait if there are more messages to send within the limit
+        if i < len(recipients_to_process) - 1:
              log_message('info', f"Waiting for {delay} seconds before sending the next message...")
              time.sleep(delay)
 
