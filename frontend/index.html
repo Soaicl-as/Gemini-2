@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Mass DM Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom styles for better log readability */
+        #log-output {
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap; /* Preserve whitespace and wrap text */
+            word-wrap: break-word; /* Break long words */
+            font-family: monospace; /* Monospace font for logs */
+            font-size: 0.9em;
+        }
+        .log-info { color: #3182ce; } /* Blue */
+        .log-warning { color: #dd6b20; } /* Orange */
+        .log-error { color: #e53e3e; } /* Red */
+    </style>
+</head>
+<body class="bg-gray-100 p-6">
+    <div class="max-w-3xl mx-auto bg-white rounded-lg shadow-xl p-8">
+        <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">Instagram Mass DM Bot</h1>
+
+        <div id="login-section" class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Instagram Login</h2>
+            <form id="login-form" class="space-y-4">
+                <div>
+                    <label for="username" class="block text-sm font-medium text-gray-700">Username:</label>
+                    <input type="text" id="username" name="username" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-700">Password:</label>
+                    <input type="password" id="password" name="password" required
+                           class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                </div>
+                <button type="submit"
+                        class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Login
+                </button>
+            </form>
+
+            <div id="2fa-section" class="mt-6 hidden">
+                <h3 class="text-lg font-semibold mb-3 text-gray-700">Two-Factor Authentication</h3>
+                <p class="text-sm text-gray-600 mb-4">A 2FA code has been sent to your registered email or phone. Please enter it below.</p>
+                <form id="2fa-form" class="space-y-4">
+                    <div>
+                        <label for="2fa-code" class="block text-sm font-medium text-gray-700">2FA Code:</label>
+                        <input type="text" id="2fa-code" name="code" required
+                               class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                    </div>
+                    <button type="submit"
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
+                        Verify Code
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div id="bot-actions-section" class="mb-8 hidden">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Bot Actions</h2>
+
+            <div class="mb-6 p-4 border border-gray-200 rounded-md">
+                <h3 class="text-lg font-semibold mb-3 text-gray-700">Get Followers or Following List</h3>
+                <form id="get-list-form" class="space-y-4">
+                    <div>
+                        <label for="target-username" class="block text-sm font-medium text-gray-700">Target Instagram Username:</label>
+                        <input type="text" id="target-username" name="target_username" required
+                               class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label for="list-type" class="block text-sm font-medium text-gray-700">List Type:</label>
+                        <select id="list-type" name="list_type" required
+                                class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                            <option value="followers">Followers</option>
+                            <option value="following">Following</option>
+                        </select>
+                    </div>
+                    <button type="submit"
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500">
+                        Get List
+                    </button>
+                </form>
+                <div id="user-list-output" class="mt-4 text-sm text-gray-800 max-h-40 overflow-y-auto">
+                    </div>
+            </div>
+
+            <div class="p-4 border border-gray-200 rounded-md">
+                <h3 class="text-lg font-semibold mb-3 text-gray-700">Send Mass Direct Message</h3>
+                <form id="send-dm-form" class="space-y-4">
+                    <div>
+                        <label for="recipient-pks" class="block text-sm font-medium text-gray-700">Recipient User PKs (comma-separated):</label>
+                        <textarea id="recipient-pks" name="recipient_pks" rows="3" required
+                                  class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                  placeholder="e.g., 123456789, 987654321, ... (Get PKs from 'Get List' above)"></textarea>
+                    </div>
+                     <div>
+                        <label for="max-recipients" class="block text-sm font-medium text-gray-700">Max Recipients to Message:</label>
+                        <input type="number" id="max-recipients" name="max_recipients" value="10" min="1" required
+                               class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                    </div>
+                    <div>
+                        <label for="message" class="block text-sm font-medium text-gray-700">Message:</label>
+                        <textarea id="message" name="message" rows="4" required
+                                  class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                  placeholder="Your message here..."></textarea>
+                    </div>
+                    <div class="flex space-x-4">
+                        <div class="flex-1">
+                            <label for="min-delay" class="block text-sm font-medium text-gray-700">Min Delay (seconds):</label>
+                            <input type="number" id="min-delay" name="min_delay" value="10" min="0" required
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        </div>
+                        <div class="flex-1">
+                            <label for="max-delay" class="block text-sm font-medium text-gray-700">Max Delay (seconds):</label>
+                            <input type="number" id="max-delay" name="max_delay" value="30" min="0" required
+                                   class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        </div>
+                    </div>
+                    <button type="submit"
+                            class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500">
+                        Send Mass DM
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div>
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Logs</h2>
+            <div id="log-output" class="bg-gray-800 text-green-400 p-4 rounded-md">
+                <p>Waiting for activity...</p>
+            </div>
+        </div>
+
+        <div id="status-message" class="mt-6 text-center text-sm font-medium text-gray-700"></div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
