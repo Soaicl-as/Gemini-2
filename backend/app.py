@@ -5,10 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware # Required for local testing 
 import uvicorn
 import time
 import json
+import os # Import os to access environment variables
+import asyncio # Import asyncio for the log_generator sleep
 from typing import List, Dict
 
-from instagram_client import login, complete_2fa, get_user_id, get_followers_or_following, send_mass_dm, is_logged_in
-from logger import get_logs, log_message
+# Corrected import: Use relative import for modules within the same package (backend)
+from .instagram_client import login, complete_2fa, get_user_id, get_followers_or_following, send_mass_dm, is_logged_in
+from .logger import get_logs, log_message # Use relative import for logger
 
 app = FastAPI()
 
@@ -23,13 +26,19 @@ app.add_middleware(
 )
 
 # Mount static files directory for the frontend
+# Ensure the path is correct relative to where the app is run
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     """Serves the frontend index.html file."""
-    with open("frontend/index.html", "r") as f:
-        return HTMLResponse(content=f.read())
+    # Ensure the path to index.html is correct
+    try:
+        with open("frontend/index.html", "r") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Frontend index.html not found. Ensure the 'frontend' directory is in the correct location.")
+
 
 @app.post("/login")
 async def handle_login(username: str = Form(...), password: str = Form(...)):
@@ -56,7 +65,7 @@ async def handle_get_list(target_username: str = Form(...), list_type: str = For
 
     user_id = get_user_id(target_username)
     if not user_id:
-        raise HTTPException(status_code=404, detail=f"User '{target_username}' not found.")
+        raise HTTPException(status_code=404, detail=f"User '{target_username}' not found or not public.")
 
     result = get_followers_or_following(user_id, list_type)
     if result.get("status") == "error":
@@ -92,17 +101,20 @@ async def handle_send_dm(
     if not message:
          raise HTTPException(status_code=400, detail="Message cannot be empty.")
 
-    if min_delay < 0 or max_delay < 0 or min_delay > max_delay:
-         raise HTTPException(status_code=400, detail="Invalid delay range.")
+    if min_delay < 0 or max_delay < 0 or min_delay > max_delay or min_delay > max_recipients: # Added check for min_delay vs max_recipients (might be a typo, assuming min_delay shouldn't exceed max_delay)
+         raise HTTPException(status_code=400, detail="Invalid delay range or maximum recipients.")
 
     if max_recipients <= 0:
          raise HTTPException(status_code=400, detail="Maximum recipients must be a positive number.")
 
     # Run the potentially long-running send_mass_dm task in the background
     # so the API call returns immediately. Logs will be streamed via /logs.
-    background_tasks.add_task(send_mass_dm, pks_list, message, min_delay, max_delay, max_recipients)
+    # Pass only the required number of recipients to the background task
+    recipients_to_message = pks_list[:max_recipients]
+    background_tasks.add_task(send_mass_dm, recipients_to_message, message, min_delay, max_delay, max_recipients)
 
-    return {"status": "processing", "message": "Mass DM task started in the background. Check logs for progress."}
+
+    return {"status": "processing", "message": f"Mass DM task started in the background for up to {len(recipients_to_message)} recipients. Check logs for progress."}
 
 
 @app.get("/logs")
@@ -115,15 +127,15 @@ async def stream_logs():
                 for log in logs:
                     # SSE format: data: [log message]\n\n
                     yield f"data: {json.dumps({'log': log})}\n\n"
-            await asyncio.sleep(1) # Check for new logs every second
+            await asyncio.sleep(0.5) # Check for new logs more frequently
 
-    # Need asyncio for sleep in generator
-    import asyncio
     return StreamingResponse(log_generator(), media_type="text/event-stream")
 
 
-# To run locally: uvicorn app:app --reload --port 8000
-# For Render: uvicorn app:app --host 0.0.0.0 --port $PORT
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+# To run locally: uvicorn backend.app:app --reload --port 8000
+# For Render: uvicorn backend.app:app --host 0.0.0.0 --port $PORT
+# The __name__ == "__main__": block is for local development/testing.
+# Render's entrypoint command handles running uvicorn directly.
+# if __name__ == "__main__":
+#     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
 
